@@ -1,148 +1,357 @@
 # bmpToTiffLzw
 
-NAS 等に保存された **BMP（8bit想定）** を、**画質を変えずに TIFF（LZW圧縮 / 可逆）**へ一括変換して同じフォルダ（または配下）に保存するためのツールです。  
-**BMPは削除しません**（ユーザーが必要に応じて手動で削除してください）。
+NAS 等に保存された **BMP（8bit 想定）** を、**画質を変えずに TIFF（LZW 圧縮 / 可逆）** へ一括変換するツールです。
+**BMP は削除しません**（ユーザーが必要に応じて手動で削除してください）。
+
+---
 
 ## 特徴
 
-- **BMP → TIFF（LZW）** に一括変換（可逆圧縮）
-- **BMPは保持**（削除しない）
-- ディレクトリ配下を **再帰的に検索**して変換
-- 同名のTIFFが存在する場合は **スキップ**（上書き設定がある場合はオプションで制御）
-- 失敗しても処理を継続し、最後に **サマリ（成功/失敗/スキップ）** を表示
-- **標準入力で対象フォルダを質問**し、入力後は基本的に全自動で実行
+- **BMP → TIFF（LZW）** 一括変換（可逆圧縮・非破壊）
+- **BMP はそのまま保持**（削除オプションなし）
+- ディレクトリ配下を **再帰的に検索** して変換
+- 起動時に **標準入力でフォルダパスを質問**。入力後は全自動
+- 同名 TIFF が存在する場合は **スキップ**（`--overwrite` で上書き可）
+- 変換中は **`.tmp` ファイルを経由してから rename**（中断時に壊れた TIFF を残さない）
+- 1 ファイルが失敗しても **処理を継続** し、最後に **サマリ** を表示
+- 変換エンジン: **ImageMagick**（優先）または **Pillow**（フォールバック）
 
-## 想定する用途
+---
 
-- フィルムスキャナ等で作成した巨大な BMP（例：1枚40MB）を、保管しつつ容量と取り回しを改善したい
-- Windows エクスプローラーのサムネが重い／NAS 上での取り扱いが遅いので、TIFF化して軽くしたい（※TIFF化だけでサムネが劇的に改善しない場合もあります。JPEGプレビューの併用が効くケースもあります）
+## 動作環境
 
-## 仕組み（概要）
+- Ubuntu（他の Linux でも動作すると思われます）
+- Python 3.8 以上
 
-1. 起動すると、標準入力で「変換対象のフォルダパス」を尋ねます
-2. 指定フォルダ配下の `.bmp` を再帰的に列挙します
-3. 各BMPを読み込み、同じ場所に同名の `.tif`（または `.tiff`）を **LZW圧縮**で保存します
-4. 既に出力ファイルがある場合はスキップします
-5. 終了時に処理結果のサマリを表示します
+---
 
-## 依存関係
+## セットアップ
 
-実装方式によりどちらかになります（本リポジトリの実装に合わせてください）。
-
-### パターンA：ImageMagick を利用（推奨：安定・高速）
-
-- ImageMagick（`magick` または `convert`）
-- Python3（CLI制御・ファイル走査）
-
-Ubuntu例：
+### ステップ 1: ImageMagick をインストールする（推奨）
 
 ```bash
 sudo apt update
-sudo apt install -y imagemagick python3
+sudo apt install -y imagemagick
 ```
 
-### パターンB：Pythonのみで完結
+ImageMagick があれば Pillow は不要です。LZW が確実に効くうえ、処理も安定しています。
 
-- Python3
-- Pillow / tifffile 等（TIFF LZW を確実に指定できる構成）
+> **Pillow を使う場合（ImageMagick がない環境のフォールバック）**
+>
+> ```bash
+> python3 -m venv .venv
+> source .venv/bin/activate
+> pip install -r requirements.txt
+> ```
+>
+> 両方入っている場合は **ImageMagick が優先** されます。
 
-Ubuntu例（venv推奨）：
+---
+
+### ステップ 2: ImageMagick のリソース制限を緩和する（大きな画像を扱う場合は必須）
+
+Ubuntu の ImageMagick はデフォルトのリソース制限がとても保守的です。
+大きな BMP（目安: 1 ファイルあたり 20MB 超、または 7,000px 超）を変換しようとすると、
+以下のようなエラーが出て変換に失敗します。
+
+```
+cache resources exhausted
+width or height exceeds limit
+```
+
+`/etc/ImageMagick-6/policy.xml`（ImageMagick 7 の場合は `/etc/ImageMagick-7/policy.xml`）を
+開いて、`<policymap>` 内のリソース設定を書き換えてください。
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install pillow tifffile
+sudo nano /etc/ImageMagick-6/policy.xml
 ```
 
-> 注意：環境やライブラリの組み合わせによっては、TIFFの圧縮指定やタグの扱いに差が出ることがあります。  
-> 「LZW圧縮が確実に効くこと」を重視するなら ImageMagick の利用が無難です。
+**変更前（Ubuntu デフォルト）:**
+
+```xml
+<policy domain="resource" name="memory" value="256MiB"/>
+<policy domain="resource" name="map"    value="512MiB"/>
+<policy domain="resource" name="width"  value="16KP"/>
+<policy domain="resource" name="height" value="16KP"/>
+<policy domain="resource" name="area"   value="128MP"/>
+<policy domain="resource" name="disk"   value="1GiB"/>
+```
+
+**変更後:**
+
+```xml
+<policy domain="resource" name="memory" value="2GiB"/>
+<policy domain="resource" name="map"    value="4GiB"/>
+<policy domain="resource" name="width"  value="65KP"/>
+<policy domain="resource" name="height" value="65KP"/>
+<policy domain="resource" name="area"   value="1GP"/>
+<policy domain="resource" name="disk"   value="8GiB"/>
+```
+
+各設定値の意味:
+
+| 設定 | 変更前 | 変更後 | 意味 |
+|---|---|---|---|
+| `memory` | 256MiB | 2GiB | RAM 上のピクセルキャッシュ上限 |
+| `map` | 512MiB | 4GiB | メモリマップ上限 |
+| `width` | 16KP（16,000px） | 65KP（65,000px） | 画像の幅の上限 |
+| `height` | 16KP（16,000px） | 65KP（65,000px） | 画像の高さの上限 |
+| `area` | 128MP（1.28億px） | 1GP（10億px） | 一度に扱えるピクセル数の上限 |
+| `disk` | 1GiB | 8GiB | RAM が足りない場合のディスクキャッシュ上限 |
+
+> **`disk` の値について**
+> ディスクキャッシュは作業ディスクの空き容量の範囲で使われます。
+> 実際に 8GiB が消費されるわけではなく、上限として指定するものです。
+> ローカル SSD など十分な空き容量があることを確認してから設定してください。
+
+---
 
 ## 使い方
 
-### 1) 実行
-
-例：スクリプト名が `convertBmpToTiff.py` の場合
+### 基本実行
 
 ```bash
 python3 convertBmpToTiff.py
 ```
 
-起動後に表示されるプロンプトへ、変換対象のフォルダ（絶対パス推奨）を入力します。
+起動すると変換エンジンを表示した後、フォルダパスを質問します。
 
-例：
-
-```text
-Enter target folder path: /mnt/nas/filmScans
+```
+変換エンジン: ImageMagick (convert)
+変換対象のフォルダパスを入力してください: /mnt/nas/filmScans
 ```
 
-入力後、全自動で変換が始まります。
+パスを入力すると、以降は全自動で変換します。
 
-### 2) 出力
+### 実行例（出力イメージ）
 
-入力フォルダ配下に、元ファイル名と同名で拡張子だけ変更したTIFFが作成されます。
+```
+変換エンジン: ImageMagick (convert)
+変換対象のフォルダパスを入力してください: /home/user/photos
 
-- `example.bmp` → `example.tif`
+/home/user/photos をスキャン中...
+5 件の BMP ファイルを検出しました。
 
-**BMPは残ります。**
+[1/5] OK       /home/user/photos/scan001.bmp
+           → /home/user/photos/scan001.tif
+[2/5] OK       /home/user/photos/scan002.bmp
+           → /home/user/photos/scan002.tif
+[3/5] skip     /home/user/photos/scan003.bmp
+[4/5] FAILED   /home/user/photos/scan004.bmp
+           reason: ...エラー詳細...
+[5/5] OK       /home/user/photos/scan005.bmp
+           → /home/user/photos/scan005.tif
 
-## NAS上で実行する場合の注意
+────────────────────────────────────────────────────────────
+処理結果サマリ
+────────────────────────────────────────────────────────────
+  変換成功   : 3
+  スキップ   : 1
+  失敗       : 1
 
-BMPが巨大かつ枚数が多い場合、NAS上で直接変換すると以下がボトルネックになりがちです。
+失敗したファイル:
+  /home/user/photos/scan004.bmp
+    ...エラー詳細...
+────────────────────────────────────────────────────────────
+```
 
-- NASのストレージI/O（特にHDD中心の場合）
-- SMB経由のランダムI/O
-- 変換中の一時ファイル書き込み
+失敗があっても処理は最後まで継続します。再実行すると成功済みのファイルはスキップされるので、
+失敗分だけを自動的にリトライできます。
 
-可能なら、
+---
 
-1. いったんローカルSSDにフォルダをコピー
-2. ローカルで変換
-3. 生成したTIFFだけNASへ戻す
+## CLI オプション一覧
 
-の方が安定して速いことが多いです。
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| *(なし)* | — | 標準入力でフォルダを質問して全自動変換 |
+| `--no-recursive` | オフ | サブディレクトリを再帰処理しない |
+| `--overwrite` | オフ | 既存の TIFF を上書きする |
+| `--dryRun` | オフ | 変換せずに処理内容だけ表示する |
+| `--jobs N` | `2` | 並列変換数（NAS 環境では `1` を推奨） |
+| `--ext tif\|tiff` | `tif` | 出力ファイルの拡張子 |
+| `--dst DIR` | *(入力と同じ)* | 出力先ディレクトリ（構造を維持して配置） |
 
-## LZW圧縮になっているか確認する
+### オプション使用例
 
-ImageMagick が入っている場合：
+```bash
+# 変換内容を事前確認（ファイルは書かない）
+python3 convertBmpToTiff.py --dryRun
+
+# 既存 TIFF を上書きして再変換
+python3 convertBmpToTiff.py --overwrite
+
+# 拡張子を .tiff にする
+python3 convertBmpToTiff.py --ext tiff
+
+# 出力先を別ディレクトリに（ディレクトリ構造を維持）
+python3 convertBmpToTiff.py --dst /mnt/nas/tiffs
+
+# NAS 上のファイルを直接変換する場合（並列数を 1 に下げて安全に）
+python3 convertBmpToTiff.py --jobs 1
+
+# サブディレクトリを処理しない
+python3 convertBmpToTiff.py --no-recursive
+```
+
+---
+
+## 出力ファイルについて
+
+入力と同じディレクトリ（デフォルト）に、元ファイル名の拡張子だけ変えた TIFF が作成されます。
+
+```
+/photos/
+  scan001.bmp   ← そのまま残る
+  scan001.tif   ← 新規作成（LZW 圧縮）
+  scan002.bmp   ← そのまま残る
+  scan002.tif   ← 新規作成（LZW 圧縮）
+```
+
+`--dst` を指定した場合は、元のディレクトリ構造を維持したまま出力先に配置します。
+
+```
+入力: /bmp/2024/scan001.bmp  + --dst /tiff
+出力: /tiff/2024/scan001.tif
+```
+
+---
+
+## NAS 上で実行する場合の注意
+
+BMP が巨大かつ枚数が多い場合、NAS 上で直接変換すると以下がボトルネックになりがちです。
+
+- NAS の HDD I/O（スピンアップ待ち・ランダムアクセスが遅い）
+- SMB 経由の書き込み遅延
+- 並列変換による I/O 競合
+
+**推奨手順:**
+
+1. ローカル SSD に BMP フォルダをコピー
+2. ローカルで変換（`python3 convertBmpToTiff.py`）
+3. 生成した TIFF だけ NAS へ戻す
+
+直接 NAS で変換する場合は `--jobs 1` を指定してください。
+
+---
+
+## LZW 圧縮の確認方法
+
+変換後のファイルが正しく LZW 圧縮されているか確認できます。
+
+### ImageMagick で確認
 
 ```bash
 identify -verbose example.tif | grep -i compression
 ```
 
-`Compression: LZW` のように表示されればOKです。
+出力例:
 
-`tiffinfo` がある場合（環境により別途インストールが必要）も確認に使えます。
+```
+Compression: LZW
+```
 
-## 失敗時の扱い
+### tiffinfo で確認（libtiff-tools が必要）
 
-- 1ファイルの変換に失敗しても、他のファイルの処理は継続します
-- 最後に「失敗したファイルの一覧」を表示します
-- 途中で中断しても、再実行すれば「既に存在するTIFF」はスキップされる想定です
+```bash
+sudo apt install -y libtiff-tools
+tiffinfo example.tif
+```
 
-## よくある原因と対策
-
-- **パスにスペースや日本語がある**
-  - ツール側で安全に扱えるよう実装してください（サブプロセス呼び出し時は配列引数で渡す等）
-- **同名TIFFが既にある**
-  - スキップされます（上書き動作が必要なら明確なオプションで制御）
-- **一部BMPが破損している**
-  - 失敗ログに出ます。元ファイルを別ツールで開けるか確認してください
-
-## 開発・貢献
-
-- バグ報告や改善提案は Issue / PR 歓迎です
-- 変換仕様（LZW、非破壊、BMP保持）を崩す変更は、必ず理由と影響範囲を明記してください
-
-## ライセンス
-
-任意です。GitHub公開なら MIT / Apache-2.0 などが一般的です。  
-（このREADMEはライセンス文を含みません。`LICENSE` ファイルを追加してください）
+出力中に `Compression Scheme: LZW` と表示されれば OK です。
 
 ---
 
-### 付記（推奨の実装上の安全策）
+## 動作確認手順
 
-- 変換中は `*.tmp` を作って、最後に rename（中断時に壊れたTIFFを残さない）
-- 例外は握りつぶさず、失敗ファイルとして記録して継続
-- 処理数が多い場合、並列化はI/O過多で逆効果になることがあるため控えめに
+はじめてセットアップしたあと、以下の手順で正しく動いているか確認できます。
+
+```bash
+# 1. テスト用の小さな BMP を作成する
+#    （ImageMagick 7 なら magick、6 なら convert を使う）
+mkdir -p /tmp/bmptest/sub
+convert -size 10x10 xc:red  /tmp/bmptest/a.bmp
+convert -size 10x10 xc:blue /tmp/bmptest/sub/b.bmp
+
+# 2. 変換実行（BMP が残ることを確認）
+python3 convertBmpToTiff.py
+# → プロンプトに /tmp/bmptest と入力
+
+ls /tmp/bmptest/
+# a.bmp と a.tif が両方あること
+
+# 3. 再実行でスキップされることを確認
+python3 convertBmpToTiff.py
+# → "skip" が表示されること
+
+# 4. --overwrite で上書きされることを確認
+python3 convertBmpToTiff.py --overwrite
+# → "OK" が表示されること
+
+# 5. LZW 圧縮を確認
+identify -verbose /tmp/bmptest/a.tif | grep -i compression
+# → Compression: LZW
+
+# 6. dryRun でファイルが増えないことを確認
+rm /tmp/bmptest/a.tif /tmp/bmptest/sub/b.tif
+python3 convertBmpToTiff.py --dryRun
+ls /tmp/bmptest/*.tif 2>/dev/null || echo "TIF なし（期待通り）"
+
+# 7. 後片付け
+rm -rf /tmp/bmptest
+```
+
+---
+
+## トラブルシュート
+
+### `cache resources exhausted` または `width or height exceeds limit`
+
+ImageMagick のリソース制限に引っかかっています。
+上記「[ステップ 2: ImageMagick のリソース制限を緩和する](#ステップ-2-imagemagick-のリソース制限を緩和する大きな画像を扱う場合は必須)」の手順で `policy.xml` を修正してください。
+
+修正後は失敗したファイルのみを再変換できます（成功済みはスキップされます）。
+
+```bash
+python3 convertBmpToTiff.py --jobs 1
+```
+
+### `Error: neither ImageMagick nor Pillow is available.`
+
+変換エンジンが見つかりません。どちらかをインストールしてください。
+
+```bash
+sudo apt install imagemagick
+# または
+pip install pillow
+```
+
+### `identify: not authorized` または `convert: not authorized`
+
+ImageMagick のコーダーポリシーで BMP や TIFF が制限されています。
+`policy.xml` で該当フォーマットの権限を確認してください。
+
+```bash
+grep -i 'BMP\|TIFF' /etc/ImageMagick-6/policy.xml
+```
+
+`rights="none"` になっていれば `rights="read|write"` に変更します。
+
+### パスにスペースや日本語が含まれる
+
+サブプロセス呼び出しはリスト形式で引数を渡しているため、スペース・日本語を含むパスでも正しく動作します。
+
+### 変換途中に中断された（`.tmp` ファイルが残った）
+
+`.tmp` ファイルは書き込み途中の状態です。削除してから再実行してください。
+
+```bash
+find /path/to/photos -name '*.tmp' -delete
+python3 convertBmpToTiff.py
+```
+
+---
+
+## ライセンス
+
+MIT

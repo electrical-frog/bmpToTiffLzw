@@ -1,0 +1,11 @@
+# BMP → TIFF (LZW) 一括変換ツール 依存パッケージ
+#
+# ImageMagick がインストール済みの場合、このファイルは不要です。
+# ImageMagick がない環境でのみ Pillow をフォールバックとして使用します。
+#
+# インストール:
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+
+Pillow>=10.0.0
